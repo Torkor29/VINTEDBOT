@@ -92,17 +92,26 @@ class VintedSession:
         self.opener = build_opener(NoRedirect, HTTPCookieProcessor(self.cookies))
         self.ready = False
 
+    def valid(self):
+        """Le cookie anonyme expire ; ne jamais réutiliser un jeton périmé."""
+        self.cookies.clear_expired_cookies()
+        return any(c.name == "access_token_web" and not c.is_expired() for c in self.cookies)
+
+    def invalidate(self):
+        self.cookies.clear()
+        self.ready = False
+
     def __call__(self, url):
         if urlsplit(url).scheme != "https" or urlsplit(url).netloc != urlsplit(ORIGIN).netloc:
             raise ValueError("Origine de session invalide")
         homepage = url == ORIGIN + "/"
-        headers = {"User-Agent": USER_AGENT,
+        # Aucune usurpation d'identité : agent réel, langue du catalogue demandé.
+        headers = {"User-Agent": USER_AGENT, "Accept-Language": "fr-FR,fr;q=0.9",
                    "Accept": "text/html" if homepage else "application/json"}
         try:
             with self.opener.open(Request(url, headers=headers), timeout=20) as response:
                 if homepage:
-                    self.ready = any(c.name == "access_token_web" and not c.is_expired()
-                                     for c in self.cookies)
+                    self.ready = self.valid()
                     if not self.ready:
                         raise ValueError("Cookie de session absent")
                     return ""
@@ -168,7 +177,8 @@ class Collector:
                 self.halt("robots.txt", "Accès refusé par robots.txt")
                 return
             self.store.set("next_request", now + self.request_gap())
-            if self.session is not None and not self.session.ready:
+            if self.session is not None and not (self.session.ready and self.session.valid()):
+                self.session.invalidate()
                 stage = "session"
                 if not self.robots.can_fetch(USER_AGENT, ORIGIN + "/"):
                     self.record_attempt(stage, "disallowed")
@@ -187,7 +197,9 @@ class Collector:
             self.store.set("collector_error", "")
         except RemoteError as e:
             self.record_attempt(stage, "http_error", e.status)
-            if e.status in (401, 403) or 300 <= e.status < 400:
+            if e.status == 401 and stage == "catalogue" and self.renew_session(now):
+                self.backoff(f, f"Session Vinted expirée à l’étape {stage} (HTTP 401) ; renouvellement.", e.retry_after)
+            elif e.status in (401, 403) or 300 <= e.status < 400:
                 reason = "Redirection non suivie" if 300 <= e.status < 400 else "Accès refusé"
                 self.halt(stage, f"{reason} à l’étape {stage} (HTTP {e.status}). Aucune nouvelle tentative automatique.")
             else:
@@ -198,6 +210,23 @@ class Collector:
         except OSError:
             self.record_attempt(stage, "network_error")
             self.backoff(f, f"Vinted injoignable à l’étape {stage}")
+
+    def renew_session(self, now):
+        """Un jeton anonyme périmé se renouvelle ; un refus persistant reste un arrêt.
+
+        Budget strict : au plus 3 renouvellements par heure. Ce n’est pas une
+        rotation d’identité et cela ne contourne aucun blocage.
+        """
+        if self.session is None:
+            return False
+        count, since = self.store.get("session_renewals", [0, 0])
+        if now - since > 3600:
+            count, since = 0, now
+        if count >= 3:
+            return False
+        self.store.set("session_renewals", [count + 1, since])
+        self.session.invalidate()
+        return True
 
     def backoff(self, f, message, retry=0):
         failures = min(self.store.get("collector_failures", 0) + 1, 10)

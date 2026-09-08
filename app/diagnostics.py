@@ -18,6 +18,7 @@ def report(path, enabled=False):
                 "last_error": setting("collector_error", ""),
                 "last_attempt": setting("collector_last_attempt"),
                 "next_request_at": setting("next_request", 0),
+                "session_renewals_last_hour": setting("session_renewals", [0, 0])[0],
                 "filters_total": total, "filters_enabled": active, "filters_with_success": verified,
                 "alerts_pending": c.execute("SELECT count(*) FROM alerts WHERE state='pending'").fetchone()[0],
                 "telegram_last_poll_at": setting("telegram_poll_ok", 0)}

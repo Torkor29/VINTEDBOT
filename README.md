@@ -43,8 +43,23 @@ Consultez les règles de Vinted et obtenez l’autorisation appropriée avant d�
 - Première exécution : mémorisation sans alerte. Modifier les critères ou reprendre un filtre crée une nouvelle référence ; les articles déjà présents à la reprise ne sont pas envoyés.
 - Première page uniquement (96 résultats demandés). Une recherche trop large peut manquer des annonces publiées entre deux passages : affiner les critères. Aucun rattrapage exhaustif ou historique complet n’est garanti.
 - Un même article ne produit qu’une alerte par utilisateur, même s’il correspond à plusieurs filtres. Une baisse de prix ne déclenche pas une seconde alerte.
-- HTTP 401/403, redirection, format inattendu ou refus robots : arrêt persistant, sans nouvelle tentative automatique. HTTP 429/erreurs réseau : attente globale exponentielle, respect de `Retry-After` sans plafonner la durée exigée par le serveur.
+- HTTP 401 sur le catalogue : le jeton anonyme est considéré comme périmé. La session est jetée et recréée, au maximum **3 fois par heure**, avec attente exponentielle entre les tentatives ; au-delà, arrêt persistant. Un cookie expiré est également détecté avant l’appel et remplacé sans erreur. HTTP 403, redirection, format inattendu ou refus robots : arrêt persistant, sans nouvelle tentative automatique. HTTP 429/erreurs réseau : attente globale exponentielle, respect de `Retry-After` sans plafonner la durée exigée par le serveur.
 - Aucun mécanisme ne garantit l’absence de bannissement. Ne pas utiliser ce projet pour contourner un blocage.
+
+### Conseils communautaires : ce qui est repris, ce qui est refusé
+
+Des recommandations circulent sur Reddit pour « faire tenir » un scraper Vinted. Elles ont été triées :
+
+| Conseil | Décision |
+|---|---|
+| Le catalogue exige une session (cookies obtenus par une visite normale) | **Déjà en place** : session anonyme en mémoire, jamais de cookie de compte. |
+| Le jeton est renouvelé/rejeté au bout de quelques dizaines d’appels | **Repris** : 401 → renouvellement borné (3/h) au lieu d’un arrêt immédiat. |
+| Réutiliser les cookies plutôt que d’ouvrir une session à chaque requête | **Repris** : la session est conservée tant que le cookie est valide, et remplacée dès qu’il expire. |
+| Backoff aléatoire, espacement des requêtes | **Déjà en place** : espacement global persistant + attente exponentielle avec aléa après erreur. |
+| Proxies résidentiels/mobiles rotatifs, empreintes TLS/JA3 imitant Chrome, User-Agent de navigateur, navigateur headless pour récolter des jetons | **Refusé** : ce sont des techniques de contournement des protections anti-bot d’un site dont les conditions interdisent le scraping. Elles ne sont pas implémentées et ne le seront pas ici. L’agent annoncé reste `VintedBotPersonal/0.1`. |
+| Pagination au-delà de la première page / limite ~960 résultats | **Non repris** : augmenterait le volume de requêtes sans nécessité pour une veille temps réel. Une page de 96 résultats suffit ; affiner les filtres. |
+
+Si le collecteur s’arrête malgré ces réglages, la réponse correcte est de réduire la cadence ou d’obtenir une autorisation d’accès — pas de masquer l’origine des requêtes.
 
 ## Comptabilité de gestion
 
