@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#082f36"><meta name="description" content="Votre espace personnel Vinted : filtres, alertes Telegram et suivi des achats et ventes.">
+  <title>VINTEDBOT · Mon espace</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script><script defer src="/app.js"></script>
+</head>
+<body>
+<header><div><span class="wordmark">VINTED<span>BOT</span></span><p>MON ESPACE</p></div><button id="refresh" class="secondary">Actualiser</button></header>
+<main>
+  <div id="notice" class="notice" role="status">Connexion à votre espace…</div>
+  <nav aria-label="Navigation principale"><button data-tab="filters" aria-current="page">Mes filtres</button><button data-tab="alerts">Annonces</button><button data-tab="trades">Ma compta</button></nav>
+  <section id="filters" class="tab">
+    <div class="section-title"><div><h1>Trouver la bonne pièce.</h1><p>Vos recherches, réunies au même endroit.</p></div><button id="new-filter">+ Nouveau filtre</button></div>
+    <div id="collector-status" class="panel muted">État du suivi indisponible</div>
+    <div id="filter-list" class="cards"></div>
+  </section>
+  <section id="alerts" class="tab" hidden>
+    <div class="section-title"><div><h1>Les dernières trouvailles.</h1><p>Les 200 dernières annonces détectées par vos filtres.</p></div></div>
+    <div id="alert-list" class="cards"></div>
+  </section>
+  <section id="trades" class="tab" hidden>
+    <div class="section-title"><div><h1>Chaque pièce compte.</h1><p>Achats, stock et ventes · montants en euros.</p></div><button id="new-trade">+ Ajouter un achat</button></div>
+    <div class="metrics" id="metrics"></div>
+    <div class="toolbar"><p>Suivi de gestion, hors impôts et cotisations.</p><button id="export" class="secondary">Exporter le CSV</button></div>
+    <div id="trade-list" class="cards"></div>
+  </section>
+  <footer>VINTEDBOT est un outil indépendant, sans affiliation à Vinted. Aucun achat automatique.</footer>
+</main>
+<dialog id="filter-dialog"><form id="filter-form">
+  <div class="dialog-title"><h2 id="filter-title">Nouveau filtre</h2><button type="button" data-close="filter-dialog" class="icon" aria-label="Fermer">×</button></div>
+  <input name="id" type="hidden">
+  <label>Nom du filtre<input name="name" placeholder="Ex. Vestes Patagonia · taille M" maxlength="180" required></label>
+  <label>Lien de recherche Vinted France<input name="url" type="url" placeholder="https://www.vinted.fr/catalog?..." maxlength="3000" required></label>
+  <p class="hint">Sur Vinted, choisissez mots-clés, marques, tailles, état et prix, puis copiez le lien de la recherche. Le tri sera toujours « plus récents ».</p>
+  <label>Mots à exclure<input name="exclude" placeholder="enfant, trou, tache" maxlength="500"></label>
+  <label>Fréquence souhaitée<select name="interval"><option value="300">Toutes les 5 minutes</option><option value="600">Toutes les 10 minutes</option><option value="900">Toutes les 15 minutes</option><option value="1800">Toutes les 30 minutes</option><option value="3600">Toutes les heures</option><option value="86400">Chaque jour</option></select></label>
+  <label class="check"><input type="checkbox" name="enabled" checked>Suivre cette recherche</label>
+  <p class="hint">Le délai réel dépend du nombre de filtres et des limites de Vinted. Le premier passage, ou la reprise après une pause, crée une référence sans alerte.</p>
+  <p class="form-error" role="alert"></p><button type="submit" class="full">Enregistrer le filtre</button>
+</form></dialog>
+<dialog id="trade-dialog"><form id="trade-form">
+  <div class="dialog-title"><h2 id="trade-title">Ajouter un achat</h2><button type="button" data-close="trade-dialog" class="icon" aria-label="Fermer">×</button></div>
+  <input name="id" type="hidden">
+  <label>Article<input name="title" required maxlength="180" placeholder="Ex. Veste Patagonia bleue"></label>
+  <label>Lien Vinted (facultatif)<input name="url" type="url" maxlength="2000"></label>
+  <div class="fields"><label>Date d’achat<input name="bought_on" type="date" required></label><label>Prix d’achat (€)<input name="purchase" type="number" min="0" max="1000000" step="0.01" required></label></div>
+  <label>Frais d’achat et livraison payée (€)<input name="purchase_fees" type="number" min="0" max="1000000" step="0.01" value="0" required></label>
+  <h3>Vente</h3><p class="hint">Laissez la date vide tant que l’article est en stock. Pour un retour, gardez la vente et indiquez le remboursement ; créez une nouvelle fiche à coût nul si l’article est remis en stock.</p>
+  <div class="fields"><label>Date de vente<input name="sold_on" type="date"></label><label>Prix de vente brut (€)<input name="sale" type="number" min="0" max="1000000" step="0.01" value="0" required></label></div>
+  <div class="fields"><label>Frais de vente / envoi à votre charge (€)<input name="sale_fees" type="number" min="0" max="1000000" step="0.01" value="0" required></label><label>Remboursement au client (€)<input name="refund" type="number" min="0" max="1000000" step="0.01" value="0" required></label></div>
+  <label>Notes / référence du justificatif<textarea name="notes" maxlength="2000" rows="3"></textarea></label>
+  <p class="form-error" role="alert"></p><button type="submit" class="full">Enregistrer l’article</button>
+</form></dialog>
+</body></html>
