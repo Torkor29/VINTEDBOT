@@ -95,6 +95,15 @@ class Collector:
         rate = self.robots.request_rate(USER_AGENT)
         return max(self.gap, delay, rate.seconds / rate.requests if rate else 0)
 
+    def record_attempt(self, stage, outcome, http_status=None):
+        # No search parameters, response bodies, cookies, tokens or user IDs.
+        self.store.set("collector_last_attempt", {"stage": stage, "outcome": outcome,
+                       "http_status": http_status, "at": time.time()})
+
+    def halt(self, stage, message):
+        self.store.set("collector_halted", message)
+        log.warning("Collecte arrêtée (%s) : %s", stage, message)
+
     def step(self):
         now = time.time()
         if not self.enabled or self.store.get("collector_halted") or self.store.get("next_request", 0) > now:
@@ -107,8 +116,10 @@ class Collector:
         api = ORIGIN + "/api/v2/catalog/items?" + urlencode(parse_qsl(urlsplit(f["url"]).query) + [("page", "1"), ("per_page", "96")])
         # Persist before network I/O; restarts never reset the global budget.
         self.store.set("next_request", now + self.gap)
+        stage = "robots.txt" if self.robots_until <= now else "catalogue"
         try:
             if self.robots_until <= now:
+                self.record_attempt(stage, "requesting")
                 raw = self.fetch(ORIGIN + "/robots.txt")
                 if "user-agent:" not in raw.lower():
                     raise ValueError("robots.txt illisible")
@@ -117,25 +128,33 @@ class Collector:
                 self.robots_until = now + 3600
                 # robots.txt also consumes one request slot.
                 self.store.set("next_request", now + self.request_gap())
+                self.record_attempt(stage, "ok", 200)
                 return
             if not self.robots.can_fetch(USER_AGENT, api):
-                self.store.set("collector_halted", "Accès refusé par robots.txt")
+                self.record_attempt("robots.txt", "disallowed")
+                self.halt("robots.txt", "Accès refusé par robots.txt")
                 return
             self.store.set("next_request", now + self.request_gap())
             with self.store.db() as c:
                 c.execute("UPDATE filters SET next_poll=? WHERE id=?", (now + f["interval"], f["id"]))
+            self.record_attempt(stage, "requesting")
             self.store.ingest(f, normalize_items(self.fetch(api)))
+            self.record_attempt(stage, "ok", 200)
             self.store.set("collector_failures", 0)
             self.store.set("collector_error", "")
         except RemoteError as e:
+            self.record_attempt(stage, "http_error", e.status)
             if e.status in (401, 403) or 300 <= e.status < 400:
-                self.store.set("collector_halted", f"Accès refusé ou redirection (HTTP {e.status}). Aucune nouvelle tentative automatique.")
+                reason = "Redirection non suivie" if 300 <= e.status < 400 else "Accès refusé"
+                self.halt(stage, f"{reason} à l’étape {stage} (HTTP {e.status}). Aucune nouvelle tentative automatique.")
             else:
-                self.backoff(f, f"Vinted répond HTTP {e.status}", e.retry_after)
+                self.backoff(f, f"Vinted répond HTTP {e.status} à l’étape {stage}", e.retry_after)
         except (ValueError, KeyError, TypeError):
-            self.store.set("collector_halted", "Réponse inattendue. Vérification manuelle nécessaire.")
+            self.record_attempt(stage, "format_error")
+            self.halt(stage, f"Réponse inattendue à l’étape {stage}. Vérification manuelle nécessaire.")
         except OSError:
-            self.backoff(f, "Vinted injoignable")
+            self.record_attempt(stage, "network_error")
+            self.backoff(f, f"Vinted injoignable à l’étape {stage}")
 
     def backoff(self, f, message, retry=0):
         failures = min(self.store.get("collector_failures", 0) + 1, 10)

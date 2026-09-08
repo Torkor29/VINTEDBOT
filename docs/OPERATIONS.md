@@ -39,6 +39,16 @@ Ne pas exécuter `docker compose down -v` : cela supprime les volumes de donnée
 
 L’état d’arrêt est durable, y compris après redémarrage. Lire la cause dans la mini-app. Vérifier les règles et l’autorisation d’accès, puis corriger la cause avant toute reprise. Aucun changement de proxy, cookie ou CAPTCHA n’est proposé.
 
+Pour diagnostiquer sans envoyer de requête à Vinted ni modifier la base :
+
+```sh
+docker compose -f compose.tunnel.yaml exec app python -m app.diagnostics
+```
+
+Ce rapport exclut les tokens, les cookies et les critères de recherche. Les nouvelles tentatives enregistrent l'étape (`robots.txt` ou `catalogue`), l'heure et le statut HTTP. Pour un arrêt produit par une ancienne version, `last_attempt` peut être `null` : cette version n'avait pas enregistré l'étape, il est impossible de la reconstituer avec certitude. Installer une mise à jour ne débloque pas la collecte et ne relance pas de requête. Un HTTP 403 indique un refus d'accès ; ce seul code ne démontre ni une IP bannie, ni un compte banni, ni une cause précise. Le collecteur actuel ne possède pas de connexion à un compte Vinted.
+
+La mini-app affiche désormais « Bloqué » pour les filtres concernés par un arrêt global et « Désactivé » si la collecte est coupée. L'enregistrement d'un filtre ou la connexion à Telegram ne valide pas l'accès au catalogue. La correction de ces statuts et l'ajout du rapport ne résolvent pas le refus d'accès distant : celui-ci reste un blocage de fonctionnement à traiter avec un moyen d'accès accepté par Vinted.
+
 Après résolution confirmée, un opérateur peut effacer l’état d’arrêt avec la collecte arrêtée :
 
 ```sh

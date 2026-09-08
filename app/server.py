@@ -78,6 +78,7 @@ def make_handler(store, config):
                     "status": {"collector_enabled": config["collector_enabled"],
                                "halted": store.get("collector_halted", ""),
                                "error": store.get("collector_error", ""),
+                               "last_attempt": store.get("collector_last_attempt"),
                                "next_request": store.get("next_request", 0),
                                "telegram_linked": bool(linked and linked[0]),
                                "telegram_poll_ok": store.get("telegram_poll_ok", 0),

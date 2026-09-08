@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.core import Store, catalog_url, export_csv, money, summary
+from app.diagnostics import report
 from app.security import telegram_user
 from app.server import configuration, make_handler
 from app.workers import Collector, RemoteError, Telegram, normalize_items, retry_seconds
@@ -196,9 +197,31 @@ class Domain(unittest.TestCase):
         self.store.set("next_request", 0)
         worker.step()
         self.assertIn("403", self.store.get("collector_halted"))
+        self.assertEqual(self.store.get("collector_last_attempt")["stage"], "catalogue")
+        self.assertEqual(self.store.get("collector_last_attempt")["http_status"], 403)
         self.store.set("next_request", 0)
         worker.step()
         self.assertEqual(len(calls), 2)
+
+    def test_robots_http_denial_is_distinct_and_diagnostic_cannot_resume(self):
+        calls = []
+        def denied(url):
+            calls.append(url)
+            raise RemoteError(403)
+        Collector(self.store, True, fetch=denied).step()
+        before = self.store.get("collector_halted")
+        diagnostic = report(self.store.path, True)
+        self.assertEqual(diagnostic["last_attempt"]["stage"], "robots.txt")
+        self.assertEqual(diagnostic["last_attempt"]["http_status"], 403)
+        self.assertEqual(diagnostic["filters_with_success"], 0)
+        self.assertNotIn("url", diagnostic["last_attempt"])
+        self.assertEqual(self.store.get("collector_halted"), before)
+        self.store.set("next_request", 0)
+        Collector(Store(self.store.path), True, fetch=denied).step()
+        self.assertEqual(len(calls), 1)
+        self.store.set("collector_last_attempt", None)
+        self.assertIsNone(report(self.store.path)["last_attempt"])
+        self.assertEqual(report(self.store.path)["halt_reason"], before)
 
     def test_robots_denial_and_retry_after(self):
         worker = Collector(self.store, True, fetch=lambda url:"User-agent: *\nDisallow: /api/\n")

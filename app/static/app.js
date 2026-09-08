@@ -23,19 +23,23 @@ async function remove(table,id) { if (!confirm('Supprimer définitivement cet é
 function render() {
   const s=state.status;
   let status=!s.collector_enabled ? 'Collecte désactivée. Vos filtres sont enregistrés ; aucune requête Vinted n’est envoyée.' : s.halted ? 'Collecte arrêtée : '+s.halted : s.error ? 'Suivi ralenti : '+s.error : 'Suivi actif. Les annonces détectées sont placées dans la file Telegram.';
-  status+=` Limite globale : une requête toutes les ${s.global_gap} secondes au maximum.`;
+  if(s.halted) status+=' Aucun nouveau relevé ne sera effectué tant que cet arrêt persiste. Le dernier code HTTP ne permet pas, à lui seul, de déterminer sa cause ni de conclure à un bannissement de compte.';
+  if(s.collector_enabled&&!s.halted) status+=` Espacement global minimal : ${duration(s.global_gap)}.`;
   $('#collector-status').textContent=status;
-  notice(s.telegram_linked?'Espace connecté · Notifications Telegram activées.':'Espace connecté · Envoyez /start au bot pour activer les notifications.');
+  if(s.halted) notice('Collecte bloquée · Aucune nouvelle annonce ne peut être détectée.',true);
+  else if(!s.collector_enabled) notice('Collecte désactivée · Les filtres sont enregistrés, mais aucune nouvelle annonce ne sera détectée.',true);
+  else notice(s.telegram_linked?'Espace connecté · Notifications Telegram activées.':'Espace connecté · Envoyez /start au bot pour activer les notifications.');
   const filters=$('#filter-list');filters.replaceChildren();
   if(!state.filters.length) empty(filters,'Aucun filtre pour le moment. Créez votre première recherche.');
   for(const f of state.filters){
-    const box=card(f.name,badge(f.enabled?'Actif':'En pause',f.enabled?'':'paused'));
+    const label=!f.enabled?'En pause':!s.collector_enabled?'Désactivé':s.halted?'Bloqué':s.error?'Ralenti':!f.initialized?'À vérifier':'Suivi activé';
+    const box=card(f.name,badge(label,label==='Bloqué'||label==='Ralenti'?'failed':label==='Suivi activé'?'':'paused'));
     const query=new URL(f.url).searchParams.get('search_text');
     if(query) box.append(e('p',query));
     box.append(e('p',`Fréquence souhaitée : ${duration(f.interval)} · ${dateTime(f.last_poll)}`));
     if(f.exclude)box.append(e('p','Exclus : '+f.exclude));
     if(f.error)box.append(e('p',f.error));
-    if(!f.initialized)box.append(e('p','En attente du premier relevé de référence.'));
+    if(!f.initialized)box.append(e('p',!f.enabled?'Premier relevé suspendu avec ce filtre.':!s.collector_enabled?'Premier relevé impossible : la collecte est désactivée.':s.halted?'Premier relevé impossible : la collecte est bloquée.':s.error?'Premier relevé retardé ; consultez la cause ci-dessus.':'En attente du premier relevé de référence.'));
     const actions=e('div',undefined,'actions');actions.append(button('Modifier',()=>openFilter(f)),button(f.enabled?'Mettre en pause':'Reprendre',async()=>{await api('filters/'+f.id,'PUT',{...f,enabled:!f.enabled});await refresh();}),button('Supprimer',()=>remove('filters',f.id),'danger'),link(f.url,'Recherche Vinted'));box.append(actions);filters.append(box);
   }
   const alerts=$('#alert-list');alerts.replaceChildren();
