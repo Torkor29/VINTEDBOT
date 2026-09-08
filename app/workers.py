@@ -3,11 +3,12 @@ import json
 import logging
 import random
 import time
+from http.cookiejar import CookieJar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.error import HTTPError
 from urllib.parse import urlsplit, parse_qsl, urlencode
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.request import Request, build_opener, HTTPRedirectHandler, HTTPCookieProcessor
 from urllib.robotparser import RobotFileParser
 
 from .core import ORIGIN, clean_text, item_url, money
@@ -84,9 +85,41 @@ def normalize_items(raw):
     return items
 
 
+class VintedSession:
+    """One anonymous, in-memory session; never import account cookies."""
+    def __init__(self):
+        self.cookies = CookieJar()
+        self.opener = build_opener(NoRedirect, HTTPCookieProcessor(self.cookies))
+        self.ready = False
+
+    def __call__(self, url):
+        if urlsplit(url).scheme != "https" or urlsplit(url).netloc != urlsplit(ORIGIN).netloc:
+            raise ValueError("Origine de session invalide")
+        homepage = url == ORIGIN + "/"
+        headers = {"User-Agent": USER_AGENT,
+                   "Accept": "text/html" if homepage else "application/json"}
+        try:
+            with self.opener.open(Request(url, headers=headers), timeout=20) as response:
+                if homepage:
+                    self.ready = any(c.name == "access_token_web" and not c.is_expired()
+                                     for c in self.cookies)
+                    if not self.ready:
+                        raise ValueError("Cookie de session absent")
+                    return ""
+                raw = response.read(2_000_001)
+                if len(raw) > 2_000_000:
+                    raise ValueError("Réponse trop volumineuse")
+                return raw.decode("utf-8")
+        except HTTPError as e:
+            status, retry = e.code, retry_seconds(e.headers.get("Retry-After"))
+            e.close()
+            raise RemoteError(status, retry) from None
+
+
 class Collector:
-    def __init__(self, store, enabled=False, gap=1, fetch=request):
-        self.store, self.enabled, self.gap, self.fetch = store, enabled, max(1, gap), fetch
+    def __init__(self, store, enabled=False, gap=1, fetch=None):
+        self.session = VintedSession() if fetch is None else None
+        self.store, self.enabled, self.gap, self.fetch = store, enabled, max(1, gap), fetch or self.session
         self.robots = None
         self.robots_until = 0
 
@@ -135,6 +168,16 @@ class Collector:
                 self.halt("robots.txt", "Accès refusé par robots.txt")
                 return
             self.store.set("next_request", now + self.request_gap())
+            if self.session is not None and not self.session.ready:
+                stage = "session"
+                if not self.robots.can_fetch(USER_AGENT, ORIGIN + "/"):
+                    self.record_attempt(stage, "disallowed")
+                    self.halt(stage, "Accueil refusé par robots.txt")
+                    return
+                self.record_attempt(stage, "requesting")
+                self.fetch(ORIGIN + "/")
+                self.record_attempt(stage, "ok", 200)
+                return  # Session creation consumes its own global request slot.
             with self.store.db() as c:
                 c.execute("UPDATE filters SET next_poll=? WHERE id=?", (now + f["interval"], f["id"]))
             self.record_attempt(stage, "requesting")

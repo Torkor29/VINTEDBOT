@@ -37,6 +37,25 @@ Ne pas exécuter `docker compose down -v` : cela supprime les volumes de donnée
 
 ## Blocage de la collecte
 
+Le collecteur prépare désormais une session anonyme : après `robots.txt`, il visite
+l'accueil, conserve les cookies reçus en mémoire, puis interroge le catalogue JSON.
+La création de session consomme un créneau de requête séparé. Aucun cookie de compte
+n'est importé ni enregistré sur disque. Cette adaptation reprend le principe de
+session de Giglium/vinted_scraper, sans installer ce paquet ni changer aléatoirement
+l'identité HTTP. Elle ne garantit pas l'acceptation des requêtes par Vinted.
+
+Test réseau ponctuel (trois requêtes au maximum, arrêt au premier échec, base
+temporaire, aucun message Telegram et aucune modification des filtres existants) :
+
+```sh
+docker compose -f compose.tunnel.yaml exec app python -m app.probe
+```
+
+Le test affiche `success: true` uniquement si un catalogue valide a été reçu.
+Il ne prouve pas la stabilité sur la durée ni un délai de notification de 15 secondes.
+Ne pas lancer ce test en parallèle d'un collecteur actif : son budget est isolé.
+L'étape `session` permet de distinguer un refus de l'accueil d'un refus du catalogue.
+
 L’état d’arrêt est durable, y compris après redémarrage. Lire la cause dans la mini-app. Vérifier les règles et l’autorisation d’accès, puis corriger la cause avant toute reprise. Aucun changement de proxy, cookie ou CAPTCHA n’est proposé.
 
 Pour diagnostiquer sans envoyer de requête à Vinted ni modifier la base :
