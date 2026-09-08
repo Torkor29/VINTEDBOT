@@ -11,6 +11,8 @@ Mini-app Telegram personnelle, en français : recherches Vinted, notifications e
 
 ## Installation
 
+**VPS sans domaine personnel :** suivre [le démarrage avec tunnel HTTPS temporaire](docs/QUICKSTART_VPS.md). Le fichier `compose.tunnel.yaml` est une alternative au fichier standard ci-dessous, destinée aux premiers essais. Pas besoin d'acheter un domaine pour cette option.
+
 1. Créer un bot auprès de [@BotFather](https://t.me/BotFather) avec `/newbot`. Garder son token secret.
 2. Récupérer votre identifiant **numérique** Telegram, puis l’inscrire dans `TELEGRAM_ALLOWED_USER_IDS`. Il est disponible dans le champ `message.from.id` de `getUpdates` après un message à votre bot (voir le guide ci-dessous). Le pseudo `@...` ne suffit pas.
 3. Préparer un serveur Linux avec Docker/Compose, un nom de domaine pointant vers ce serveur et les ports 80/443 accessibles.
@@ -34,8 +36,9 @@ L’interface reste verrouillée hors Telegram. Il n’existe pas de mot de pass
 
 Consultez les règles de Vinted et obtenez l’autorisation appropriée avant d’activer `VINTED_ACCESS_AUTHORIZED=true` et `VINTED_COLLECTION_ENABLED=true`. Ces options constituent une configuration opérateur, pas une autorisation accordée par Vinted. Les règles d’accès peuvent évoluer. La [page française consultée](https://www.vinted.fr/terms-and-conditions) le 8 septembre 2026 affiche une version annoncée pour le 5 octobre 2026, qui interdit les bots/scraping sauf autorisation ; la page de l’ancienne URL n’exposait pas son texte. Il faut donc confirmer la version applicable lors de l’activation. [robots.txt](https://www.vinted.fr/robots.txt) n’est pas une autorisation contractuelle.
 
-- Minimum 300 s par filtre, minimum 60 s entre requêtes pour tout le serveur, y compris `robots.txt`. Les filtres sont traités par ordre d’échéance, sans exécutions parallèles du collecteur.
-- Cadence effective ≈ au moins `max(intervalle du filtre, nombre de filtres actifs × limite globale)` en régime régulier, plus aléas réseau, décalage 0–15 s et éventuels ralentissements. Aucune promesse de temps réel ou de livraison dans un délai fixe.
+- Minimum et défaut **15 s par nouveau filtre** ; choix 15 s, 30 s, 1 min ou plus dans la mini-app. Les filtres existants conservent leur intervalle : les modifier pour passer à 15 s. La mini-app recharge également ses données toutes les 15 s quand elle est visible, indépendamment du collecteur.
+- Espacement global configurable, minimum et défaut **1 s entre débuts de requêtes**, y compris `robots.txt`. Ce n'est pas une limite déclarée ou approuvée par Vinted. Les filtres sont traités par ordre d’échéance, sans exécutions parallèles du collecteur ni rafale de rattrapage. Une installation antérieure doit modifier `GLOBAL_REQUEST_GAP_SECONDS=60` dans son `.env` pour bénéficier du nouveau réglage.
+- Cadence effective ≈ au moins `max(intervalle du filtre, nombre de filtres actifs × limite globale)` en régime régulier, plus temps réseau et éventuels ralentissements. Le délai aléatoire de 0–15 s sur les passages normaux a été supprimé ; un aléa reste appliqué aux attentes après erreur. À titre d'exemple, 3 filtres à 15 s avec des réponses rapides peuvent être décalés et revérifiés chacun toutes les 15 s ; 20 filtres avec 1 s d'espacement ne peuvent pas tous l'être toutes les 15 s. Aucune promesse de temps réel ou de livraison dans un délai fixe.
 - Chaque réponse déclenche immédiatement l’insertion dans la file persistante ; le worker Telegram la traite environ chaque seconde sous réserve de ses limites.
 - Première exécution : mémorisation sans alerte. Modifier les critères ou reprendre un filtre crée une nouvelle référence ; les articles déjà présents à la reprise ne sont pas envoyés.
 - Première page uniquement (96 résultats demandés). Une recherche trop large peut manquer des annonces publiées entre deux passages : affiner les critères. Aucun rattrapage exhaustif ou historique complet n’est garanti.

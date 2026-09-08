@@ -85,10 +85,15 @@ def normalize_items(raw):
 
 
 class Collector:
-    def __init__(self, store, enabled=False, gap=60, fetch=request):
-        self.store, self.enabled, self.gap, self.fetch = store, enabled, max(60, gap), fetch
+    def __init__(self, store, enabled=False, gap=1, fetch=request):
+        self.store, self.enabled, self.gap, self.fetch = store, enabled, max(1, gap), fetch
         self.robots = None
         self.robots_until = 0
+
+    def request_gap(self):
+        delay = self.robots.crawl_delay(USER_AGENT) or 0
+        rate = self.robots.request_rate(USER_AGENT)
+        return max(self.gap, delay, rate.seconds / rate.requests if rate else 0)
 
     def step(self):
         now = time.time()
@@ -111,16 +116,14 @@ class Collector:
                 self.robots.parse(raw.splitlines())
                 self.robots_until = now + 3600
                 # robots.txt also consumes one request slot.
+                self.store.set("next_request", now + self.request_gap())
                 return
             if not self.robots.can_fetch(USER_AGENT, api):
                 self.store.set("collector_halted", "Accès refusé par robots.txt")
                 return
-            delay = self.robots.crawl_delay(USER_AGENT) or 0
-            rate = self.robots.request_rate(USER_AGENT)
-            gap = max(self.gap, delay, rate.seconds / rate.requests if rate else 0)
-            self.store.set("next_request", now + gap)
+            self.store.set("next_request", now + self.request_gap())
             with self.store.db() as c:
-                c.execute("UPDATE filters SET next_poll=? WHERE id=?", (now + f["interval"] + random.uniform(0, 15), f["id"]))
+                c.execute("UPDATE filters SET next_poll=? WHERE id=?", (now + f["interval"], f["id"]))
             self.store.ingest(f, normalize_items(self.fetch(api)))
             self.store.set("collector_failures", 0)
             self.store.set("collector_error", "")

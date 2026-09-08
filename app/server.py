@@ -129,7 +129,7 @@ def configuration():
     if enabled and os.environ.get("VINTED_ACCESS_AUTHORIZED", "false").lower() != "true":
         raise SystemExit("Collecte désactivée : un accès autorisé doit être confirmé dans la configuration.")
     return {"token": token, "allowed": allowed, "public_url": url,
-            "collector_enabled": enabled, "gap": max(60, int(os.environ.get("GLOBAL_REQUEST_GAP_SECONDS", "60")))}
+            "collector_enabled": enabled, "gap": max(1, int(os.environ.get("GLOBAL_REQUEST_GAP_SECONDS", "1")))}
 
 
 def main():
@@ -146,7 +146,7 @@ def main():
     stop = threading.Event()
     collector = Collector(store, config["collector_enabled"], config["gap"])
     telegram = Telegram(store, config["token"], config["allowed"], config["public_url"])
-    for action, pause in ((collector.step, 1), (telegram.poll, 1), (telegram.deliver, 1.1)):
+    for action, pause in ((collector.step, 0.25), (telegram.poll, 1), (telegram.deliver, 1.1)):
         threading.Thread(target=run_loop, args=(stop, action, pause), daemon=True).start()
     server = ThreadingHTTPServer((os.environ.get("BIND_HOST", "127.0.0.1"), int(os.environ.get("PORT", "8080"))), make_handler(store, config))
     def shutdown(*_):

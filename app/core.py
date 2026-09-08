@@ -120,10 +120,10 @@ class Store:
         name = clean_text(data.get("name"))
         url = catalog_url(data.get("url"))
         exclude = clean_text(data.get("exclude", ""), 500, False)
-        interval = int(data.get("interval", 300))
+        interval = int(data.get("interval", 15))
         enabled = data.get("enabled", True)
-        if not isinstance(enabled, bool) or not 300 <= interval <= 86400:
-            raise ValueError("La fréquence doit être comprise entre 5 minutes et 24 heures.")
+        if not isinstance(enabled, bool) or not 15 <= interval <= 86400:
+            raise ValueError("La fréquence doit être comprise entre 15 secondes et 24 heures.")
         with self.db() as c:
             if fid is None:
                 if c.execute("SELECT count(*) FROM filters WHERE user_id=?", (user,)).fetchone()[0] >= 20:

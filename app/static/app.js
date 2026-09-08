@@ -6,6 +6,7 @@ const initData = tg?.initData || '';
 let state = null;
 const euros = (c) => new Intl.NumberFormat('fr-FR', {style:'currency',currency:'EUR'}).format(c / 100);
 const dateTime = (t) => t ? new Date(t * 1000).toLocaleString('fr-FR') : 'Pas encore vérifié';
+const duration = (s) => s < 60 ? `${s} s` : `${s/60} min`;
 const e = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 function notice(message, error=false) { $('#notice').textContent=message; $('#notice').className='notice'+(error?' error':''); }
 async function api(path, method='GET', data) {
@@ -31,7 +32,7 @@ function render() {
     const box=card(f.name,badge(f.enabled?'Actif':'En pause',f.enabled?'':'paused'));
     const query=new URL(f.url).searchParams.get('search_text');
     if(query) box.append(e('p',query));
-    box.append(e('p',`Fréquence souhaitée : ${f.interval/60} min · ${dateTime(f.last_poll)}`));
+    box.append(e('p',`Fréquence souhaitée : ${duration(f.interval)} · ${dateTime(f.last_poll)}`));
     if(f.exclude)box.append(e('p','Exclus : '+f.exclude));
     if(f.error)box.append(e('p',f.error));
     if(!f.initialized)box.append(e('p','En attente du premier relevé de référence.'));
@@ -73,4 +74,4 @@ for(const type of ['filter','trade']){
 }
 $('#export').addEventListener('click',async()=>{try{const blob=await(await api('export')).blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='vintedbot-compta.csv';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);}catch(err){notice(err.message,true);}});
 refresh();
-setInterval(()=>{if(!document.hidden&&!document.querySelector('dialog[open]'))refresh();},30000);
+setInterval(()=>{if(!document.hidden&&!document.querySelector('dialog[open]'))refresh();},15000);

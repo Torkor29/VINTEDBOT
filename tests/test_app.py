@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
@@ -13,7 +14,7 @@ from urllib.request import Request, urlopen
 
 from app.core import Store, catalog_url, export_csv, money, summary
 from app.security import telegram_user
-from app.server import make_handler
+from app.server import configuration, make_handler
 from app.workers import Collector, RemoteError, Telegram, normalize_items, retry_seconds
 
 TOKEN = "123:test-token-not-a-real-secret"
@@ -119,6 +120,64 @@ class Domain(unittest.TestCase):
             self.store.save_trade(42, {"title":"a", "bought_on":"2026-09-08", "sold_on":"2026-09-01"})
         with self.assertRaises(ValueError):
             self.store.save_trade(42, {"title":"a", "bought_on":"2026-09-08", "sale":"1"})
+
+    def test_fast_interval_validation_and_update_preserves_baseline(self):
+        data = {**self.filter_data, "interval": 15}
+        self.store.ingest(self.filt(), normalize_items(raw_items(1)))
+        self.store.save_filter(42, data, self.fid)
+        self.assertTrue(self.filt()["initialized"])
+        self.assertEqual(self.filt()["interval"], 15)
+        self.store.ingest(self.filt(), normalize_items(raw_items(2, 1)))
+        self.assertEqual(len(self.store.alerts(42)), 1)
+        for invalid in (0, 14, 86401):
+            with self.assertRaises(ValueError):
+                self.store.save_filter(42, {**data, "interval": invalid})
+        self.store.save_filter(42, {"name": "Default", "url": data["url"]})
+        self.assertEqual(self.filt()["interval"], 15)
+        with patch.dict('os.environ', {"TELEGRAM_BOT_TOKEN": TOKEN,
+                        "TELEGRAM_ALLOWED_USER_IDS": "42", "PUBLIC_URL": "https://demo.trycloudflare.com"}, clear=True):
+            self.assertEqual(configuration()["gap"], 1)
+            self.assertFalse(configuration()["collector_enabled"])
+
+    def test_three_fast_filters_keep_fifteen_second_cadence_without_bursts(self):
+        self.store.save_filter(42, {**self.filter_data, "interval": 15}, self.fid)
+        for keyword in ('pull', 'jean'):
+            self.store.save_filter(42, {**self.filter_data, "interval": 15,
+                                      "url": f"https://www.vinted.fr/catalog?search_text={keyword}"})
+        requests = []
+        with patch('app.workers.time.time') as clock:
+            clock.return_value = 1000
+            def fetch(url):
+                requests.append((clock.return_value, url))
+                return "User-agent: *\nAllow: /\n" if url.endswith('robots.txt') else raw_items(1)
+            worker = Collector(self.store, True, fetch=fetch)
+            worker.step()  # robots at 1000; catalogue queries at 1001, 1002, 1003
+            for instant in (1000.5, 1001, 1001, 1002, 1003, 1015.99, 1016, 1017, 1018):
+                clock.return_value = instant
+                worker.step()
+            self.assertEqual([t for t, url in requests if '/api/' in url], [1001, 1002, 1003, 1016, 1017, 1018])
+            self.assertEqual([url for _, url in requests[1:4]], [url for _, url in requests[4:7]])
+            self.assertEqual(sorted(f['next_poll'] for f in self.store.filters(42)), [1031, 1032, 1033])
+
+    def test_fast_schedule_still_honors_robots_and_restart_budget(self):
+        self.store.save_filter(42, {**self.filter_data, "interval": 15}, self.fid)
+        requests = []
+        with patch('app.workers.time.time') as clock:
+            clock.return_value = 1000
+            def fetch(url):
+                requests.append(url)
+                return 'User-agent: *\nAllow: /\nCrawl-delay: 30\n' if url.endswith('robots.txt') else raw_items(1)
+            worker = Collector(self.store, True, fetch=fetch)
+            worker.step()
+            self.assertEqual(self.store.get('next_request'), 1030)
+            clock.return_value = 1015
+            worker.step()
+            Collector(Store(self.store.path), True, fetch=fetch).step()
+            self.assertEqual(len(requests), 1)
+            clock.return_value = 1030
+            worker.step()
+            self.assertEqual(len(requests), 2)
+            self.assertEqual(self.store.get('next_request'), 1060)
 
     def test_collector_disabled_robots_budget_and_403_halt(self):
         calls = []

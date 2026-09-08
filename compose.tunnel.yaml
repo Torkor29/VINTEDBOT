@@ -1,0 +1,20 @@
+# Alternative complète à compose.yaml pour les premiers essais, sans domaine acheté.
+# Ne pas combiner les deux fichiers avec -f ; voir docs/QUICKSTART_VPS.md.
+services:
+  app:
+    extends:
+      file: compose.yaml
+      service: app
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: [tunnel, --no-autoupdate, --url, 'http://app:8080']
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging:
+      options:
+        max-size: 10m
+        max-file: '3'
+volumes:
+  bot_data:
