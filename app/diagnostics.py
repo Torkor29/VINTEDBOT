@@ -2,6 +2,7 @@
 import json
 import os
 import sqlite3
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -14,11 +15,13 @@ def report(path, enabled=False):
             row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
             return json.loads(row[0]) if row else default
         total, active, verified = c.execute("SELECT count(*),coalesce(sum(enabled),0),count(last_poll) FROM filters").fetchone()
+        renewals, since = setting("session_renewals", [0, 0])
         return {"collector_enabled": enabled, "halt_reason": setting("collector_halted", ""),
                 "last_error": setting("collector_error", ""),
                 "last_attempt": setting("collector_last_attempt"),
                 "next_request_at": setting("next_request", 0),
-                "session_renewals_last_hour": setting("session_renewals", [0, 0])[0],
+                "session_renewals_last_hour": renewals if time.time() - since <= 3600 else 0,
+                "proxy_enabled": bool(os.environ.get("VINTED_PROXY_URL", "")),
                 "filters_total": total, "filters_enabled": active, "filters_with_success": verified,
                 "alerts_pending": c.execute("SELECT count(*) FROM alerts WHERE state='pending'").fetchone()[0],
                 "telegram_last_poll_at": setting("telegram_poll_ok", 0)}

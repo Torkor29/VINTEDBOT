@@ -6,12 +6,13 @@ import time
 from http.cookiejar import CookieJar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, parse_qsl, urlencode
 from urllib.request import Request, build_opener, HTTPRedirectHandler, HTTPCookieProcessor
 from urllib.robotparser import RobotFileParser
 
 from .core import ORIGIN, clean_text, item_url, money
+from .proxy import VintedProxyHandler, proxy_url
 
 log = logging.getLogger(__name__)
 USER_AGENT = "VintedBotPersonal/0.1"
@@ -89,7 +90,9 @@ class VintedSession:
     """One anonymous, in-memory session; never import account cookies."""
     def __init__(self):
         self.cookies = CookieJar()
-        self.opener = build_opener(NoRedirect, HTTPCookieProcessor(self.cookies))
+        self.proxy_enabled = bool(proxy_url())
+        self.opener = build_opener(VintedProxyHandler(proxy_url()), NoRedirect,
+                                  HTTPCookieProcessor(self.cookies))
         self.ready = False
 
     def valid(self):
@@ -123,6 +126,11 @@ class VintedSession:
             status, retry = e.code, retry_seconds(e.headers.get("Retry-After"))
             e.close()
             raise RemoteError(status, retry) from None
+        except URLError as e:
+            # urllib surfaces CONNECT failures as URLError, not HTTPError.
+            if str(e.reason).startswith('Tunnel connection failed: 407'):
+                raise RemoteError(407) from None
+            raise
 
 
 class Collector:
@@ -199,8 +207,9 @@ class Collector:
             self.record_attempt(stage, "http_error", e.status)
             if e.status == 401 and stage == "catalogue" and self.renew_session(now):
                 self.backoff(f, f"Session Vinted expirée à l’étape {stage} (HTTP 401) ; renouvellement.", e.retry_after)
-            elif e.status in (401, 403) or 300 <= e.status < 400:
-                reason = "Redirection non suivie" if 300 <= e.status < 400 else "Accès refusé"
+            elif e.status in (401, 403, 407) or 300 <= e.status < 400:
+                reason = ("Authentification du proxy refusée" if e.status == 407 else
+                          "Redirection non suivie" if 300 <= e.status < 400 else "Accès refusé")
                 self.halt(stage, f"{reason} à l’étape {stage} (HTTP {e.status}). Aucune nouvelle tentative automatique.")
             else:
                 self.backoff(f, f"Vinted répond HTTP {e.status} à l’étape {stage}", e.retry_after)

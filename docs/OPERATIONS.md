@@ -56,7 +56,49 @@ Il ne prouve pas la stabilité sur la durée ni un délai de notification de 15 
 Ne pas lancer ce test en parallèle d'un collecteur actif : son budget est isolé.
 L'étape `session` permet de distinguer un refus de l'accueil d'un refus du catalogue.
 
-L’état d’arrêt est durable, y compris après redémarrage. Lire la cause dans la mini-app. Vérifier les règles et l’autorisation d’accès, puis corriger la cause avant toute reprise. Aucun changement de proxy, cookie ou CAPTCHA n’est proposé.
+L’état d’arrêt est durable, y compris après redémarrage. Lire la cause dans la mini-app. Vérifier les règles et l’autorisation d’accès, puis corriger la cause avant toute reprise. Aucune rotation automatique de proxy ni résolution de CAPTCHA n’est effectuée.
+
+## Proxy Vinted optionnel
+
+`VINTED_PROXY_URL` configure un seul proxy HTTP supportant CONNECT vers HTTPS,
+avec hôte et port, et éventuellement une authentification utilisateur/mot de passe.
+SOCKS et le transport HTTPS vers le proxy ne sont pas pris en charge dans cette version.
+La connexion TLS à Vinted conserve la validation de certificat par défaut.
+Le proxy HTTP peut voir la destination et les identifiants du proxy ; le contenu
+Vinted reste dans le tunnel TLS. Utiliser uniquement un fournisseur de confiance.
+Choisir une sortie stable pour toute la session : pas de rotation à chaque requête.
+
+L'accueil, robots.txt et le catalogue utilisent le même proxy et le même cookie jar.
+Telegram ne lit pas ce paramètre. Les variables proxy système et `NO_PROXY` ne
+modifient pas ce routage Vinted. Si le proxy échoue, aucun retour automatique à
+l'accès direct n'a lieu. Un 403 conserve l'arrêt ; un 407 indique une erreur
+d'authentification auprès du proxy. Un proxy ne garantit pas de résoudre un 403.
+
+Configurer depuis le dépôt sur le VPS (saisie masquée des identifiants, fichier
+`.env` conservé avec droits 600 ; aucune modification des autres paramètres) :
+
+```sh
+python3 -m app.configure_proxy
+```
+
+Ne pas utiliser `HTTPS_PROXY` pour ce réglage : cela pourrait aussi concerner Telegram.
+Ne pas partager `.env` ni la sortie de `docker compose config`, qui peut contenir les secrets.
+
+Tester après construction de l'image, application arrêtée pour éviter deux collecteurs :
+
+```sh
+sudo docker compose -f compose.tunnel.yaml build app
+sudo docker compose -f compose.tunnel.yaml stop app
+sudo docker compose -f compose.tunnel.yaml run --rm --no-deps app python -m app.probe
+sudo docker compose -f compose.tunnel.yaml up -d app
+```
+
+`proxy_enabled: true` confirme le réglage, pas l'acceptation par Vinted.
+`success: true` confirme un catalogue valide pour cet essai seulement. Le test
+n'efface pas l'arrêt persistant de production. Aucun fournisseur de proxy réel
+n'a été testé avec cette intégration faute d'identifiants. Les tests locaux
+couvrent un tunnel CONNECT refusé avec 407, le routage malgré NO_PROXY,
+l'authentification, la saisie des secrets et les régressions de session.
 
 Pour diagnostiquer sans envoyer de requête à Vinted ni modifier la base :
 

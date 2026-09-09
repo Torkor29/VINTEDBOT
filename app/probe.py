@@ -23,11 +23,15 @@ def main():
             if store.get('collector_halted') or store.get('collector_error'):
                 break
         success = bool(store.filters(1)[0]['initialized'])
-        print(json.dumps({'success': success, 'last_attempt': store.get('collector_last_attempt'),
+        print(json.dumps({'success': success, 'proxy_enabled': worker.session.proxy_enabled,
+                          'last_attempt': store.get('collector_last_attempt'),
                           'halt_reason': store.get('collector_halted', ''),
                           'error': store.get('collector_error', '')}, ensure_ascii=False, indent=2))
         return 0 if success else 1
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except ValueError:
+        raise SystemExit('Configuration du proxy invalide. Vérifiez VINTED_PROXY_URL.') from None
