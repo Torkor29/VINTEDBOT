@@ -120,6 +120,20 @@ docker compose up -d app
 
 Cela conserve la prochaine échéance globale (y compris `Retry-After`). Si l’accès est toujours refusé, l’arrêt sera rétabli. Si `robots.txt` ne peut pas être vérifié, le catalogue n’est pas interrogé.
 
+### Observation bornée du catalogue
+
+Cette commande compare deux relevés sans afficher de cookie, jeton, mot de passe,
+titre d’annonce ou compte :
+
+```sh
+sudo docker compose -f compose.tunnel.yaml run --rm --no-deps app python -m app.observe_catalog
+```
+
+Elle effectue quatre accès en fonctionnement normal : robots.txt, création de
+session et deux requêtes catalogue. Elle consomme donc du trafic proxy. Le champ
+`compressed_body_bytes` mesure seulement le corps HTTP reçu et reste inférieur
+au trafic éventuellement facturé par le fournisseur.
+
 ## Telegram
 
 `getUpdates` utilise le long polling. Ne pas configurer de webhook pour ce bot et ne pas lancer deux pollers. Un ancien webhook doit être retiré volontairement via BotFather/API Telegram avant le lancement ; ce projet ne supprime pas automatiquement vos réglages existants. HTTP 409 dans les logs indique généralement un conflit webhook/poller. Les logs omettent les tokens, URLs sensibles et données comptables.

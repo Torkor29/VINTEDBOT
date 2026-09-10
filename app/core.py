@@ -72,7 +72,7 @@ class Store:
               url TEXT NOT NULL, exclude TEXT NOT NULL DEFAULT '', interval INTEGER NOT NULL,
               enabled INTEGER NOT NULL DEFAULT 1, initialized INTEGER NOT NULL DEFAULT 0,
               next_poll REAL NOT NULL DEFAULT 0, last_poll REAL, error TEXT NOT NULL DEFAULT '',
-              revision INTEGER NOT NULL DEFAULT 1);
+              revision INTEGER NOT NULL DEFAULT 1, head_item_id TEXT);
             CREATE TABLE IF NOT EXISTS seen(
               filter_id INTEGER REFERENCES filters(id) ON DELETE CASCADE,
               item_id TEXT, PRIMARY KEY(filter_id,item_id));
@@ -91,6 +91,9 @@ class Store:
               refund_cents INTEGER NOT NULL, notes TEXT NOT NULL, created REAL NOT NULL,
               updated REAL NOT NULL);
             ''')
+            columns = {row[1] for row in c.execute("PRAGMA table_info(filters)")}
+            if "head_item_id" not in columns:
+                c.execute("ALTER TABLE filters ADD COLUMN head_item_id TEXT")
 
     @contextmanager
     def db(self):
@@ -134,8 +137,10 @@ class Store:
             if not old:
                 raise LookupError()
             reset = old["url"] != url or old["exclude"] != exclude or (enabled and not old["enabled"])
-            c.execute("UPDATE filters SET name=?,url=?,exclude=?,interval=?,enabled=?,initialized=?,next_poll=0,error='',revision=revision+1 WHERE id=?",
-                      (name, url, exclude, interval, enabled, 0 if reset else old["initialized"], fid))
+            c.execute("""UPDATE filters SET name=?,url=?,exclude=?,interval=?,enabled=?,
+                      initialized=?,head_item_id=?,next_poll=0,error='',revision=revision+1 WHERE id=?""",
+                      (name, url, exclude, interval, enabled, 0 if reset else old["initialized"],
+                       None if reset else old["head_item_id"], fid))
             if reset:
                 c.execute("DELETE FROM seen WHERE filter_id=?", (fid,))
             return fid
@@ -147,7 +152,7 @@ class Store:
             if not c.execute(f"DELETE FROM {table} WHERE id=? AND user_id=?", (rid, user)).rowcount:
                 raise LookupError()
 
-    def ingest(self, filt, items):
+    def ingest(self, filt, items, notify=True):
         """Snapshot and outbox commit together; discard responses to obsolete filters."""
         now = time.time()
         with self.db() as c:
@@ -155,17 +160,44 @@ class Store:
             current = c.execute("SELECT * FROM filters WHERE id=?", (filt["id"],)).fetchone()
             if not current or current["revision"] != filt["revision"] or not current["enabled"]:
                 return
-            for it in items:
+            new_items = 0
+            alerts_created = 0
+            ordered = list(items)
+            ids = [it["id"] for it in ordered]
+            previous_head = current["head_item_id"]
+            trusted = bool(current["initialized"] and previous_head is not None)
+            if not notify or not trusted:
+                candidate_ids = set()
+                anchor_status = "baseline"
+            elif previous_head == "":
+                candidate_ids = set(ids)
+                anchor_status = "previously_empty"
+            elif previous_head in ids:
+                candidate_ids = set(ids[:ids.index(previous_head)])
+                anchor_status = "found"
+            else:
+                # Sans l'ancre du relevé précédent, impossible de distinguer un
+                # afflux de nouveautés d'un remaniement d'anciens résultats.
+                candidate_ids = set()
+                anchor_status = "missing"
+            # Le catalogue est demandé en newest_first. Insérer les anciens articles
+            # avant les récents permet à la file de prioriser le dernier publié.
+            for it in reversed(ordered):
                 fresh = c.execute("INSERT OR IGNORE INTO seen VALUES (?,?)", (filt["id"], it["id"])).rowcount
-                if not fresh or not current["initialized"]:
+                new_items += fresh
+                if not fresh or it["id"] not in candidate_ids:
                     continue
                 words = [w.strip().casefold() for w in current["exclude"].split(",") if w.strip()]
                 if any(w in (it["title"] + " " + it["brand"]).casefold() for w in words):
                     continue
-                c.execute("""INSERT OR IGNORE INTO alerts(user_id,item_id,filter_name,title,url,price_cents,size,brand,created)
+                alerts_created += c.execute("""INSERT OR IGNORE INTO alerts(user_id,item_id,filter_name,title,url,price_cents,size,brand,created)
                           VALUES (?,?,?,?,?,?,?,?,?)""", (filt["user_id"], it["id"], current["name"], it["title"],
-                          it["url"], it["price_cents"], it["size"], it["brand"], now))
-            c.execute("UPDATE filters SET initialized=1,last_poll=?,error='' WHERE id=?", (now, filt["id"]))
+                          it["url"], it["price_cents"], it["size"], it["brand"], now)).rowcount
+            head = ids[0] if ids else ""
+            c.execute("""UPDATE filters SET initialized=1,head_item_id=?,last_poll=?,error=''
+                      WHERE id=?""", (head, now, filt["id"]))
+            return {"new_items": new_items, "alerts_created": alerts_created,
+                    "new_prefix": len(candidate_ids), "anchor_status": anchor_status}
 
     def alerts(self, user):
         with self.db() as c:

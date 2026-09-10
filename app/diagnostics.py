@@ -22,8 +22,13 @@ def report(path, enabled=False):
                 "next_request_at": setting("next_request", 0),
                 "session_renewals_last_hour": renewals if time.time() - since <= 3600 else 0,
                 "proxy_enabled": bool(os.environ.get("VINTED_PROXY_URL", "")),
+                "last_transfer": setting("collector_last_transfer"),
+                "transfer_totals": setting("collector_transfer_totals", {"compressed_body_bytes": 0,
+                    "decoded_bytes": 0, "responses": 0}),
+                "catalogue_window": setting("collector_window"),
                 "filters_total": total, "filters_enabled": active, "filters_with_success": verified,
                 "alerts_pending": c.execute("SELECT count(*) FROM alerts WHERE state='pending'").fetchone()[0],
+                "alerts_expired": c.execute("SELECT count(*) FROM alerts WHERE state='expired'").fetchone()[0],
                 "telegram_last_poll_at": setting("telegram_poll_ok", 0)}
     finally:
         c.close()

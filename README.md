@@ -39,9 +39,11 @@ Consultez les règles de Vinted et obtenez l’autorisation appropriée avant d�
 - Minimum et défaut **15 s par nouveau filtre** ; choix 15 s, 30 s, 1 min ou plus dans la mini-app. Les filtres existants conservent leur intervalle : les modifier pour passer à 15 s. La mini-app recharge également ses données toutes les 15 s quand elle est visible, indépendamment du collecteur.
 - Espacement global configurable, minimum et défaut **1 s entre débuts de requêtes**, y compris `robots.txt`. Ce n'est pas une limite déclarée ou approuvée par Vinted. Les filtres sont traités par ordre d’échéance, sans exécutions parallèles du collecteur ni rafale de rattrapage. Une installation antérieure doit modifier `GLOBAL_REQUEST_GAP_SECONDS=60` dans son `.env` pour bénéficier du nouveau réglage.
 - Cadence effective ≈ au moins `max(intervalle du filtre, nombre de filtres actifs × limite globale)` en régime régulier, plus temps réseau et éventuels ralentissements. Le délai aléatoire de 0–15 s sur les passages normaux a été supprimé ; un aléa reste appliqué aux attentes après erreur. À titre d'exemple, 3 filtres à 15 s avec des réponses rapides peuvent être décalés et revérifiés chacun toutes les 15 s ; 20 filtres avec 1 s d'espacement ne peuvent pas tous l'être toutes les 15 s. Aucune promesse de temps réel ou de livraison dans un délai fixe.
-- Chaque réponse déclenche immédiatement l’insertion dans la file persistante ; le worker Telegram la traite environ chaque seconde sous réserve de ses limites.
-- Première exécution : mémorisation sans alerte. Modifier les critères ou reprendre un filtre crée une nouvelle référence ; les articles déjà présents à la reprise ne sont pas envoyés.
-- Première page uniquement (96 résultats demandés). Une recherche trop large peut manquer des annonces publiées entre deux passages : affiner les critères. Aucun rattrapage exhaustif ou historique complet n’est garanti.
+- Chaque réponse est demandée avec gzip et ne contient par défaut que **24 résultats**. Le diagnostic compte le corps compressé reçu, le volume décompressé, la durée et les éventuelles saturations de fenêtre. Ce compteur est une borne basse : il n’inclut pas les en-têtes, la connexion ni la méthode de facturation du fournisseur de proxy.
+- Première exécution : mémorisation sans alerte. Modifier les critères, reprendre un filtre ou revenir après plus de 120 secondes d’interruption crée une nouvelle référence silencieuse ; les articles déjà présents ne sont pas envoyés.
+- Première page uniquement. Une recherche qui produit 24 nouveaux identifiants entre deux passages est signalée comme saturée et peut avoir manqué des annonces : affiner les critères ou augmenter prudemment `VINTED_RESULTS_PER_POLL`.
+- Une annonce n’est alertée que si elle apparaît **avant le premier résultat du relevé précédent**. Un ancien article qui revient plus bas dans la page n’est donc pas traité comme une nouveauté. Si ce point de repère disparaît entièrement, le relevé devient une nouvelle référence silencieuse au lieu d’envoyer 24 faux positifs.
+- La file Telegram traite les annonces récentes en premier. Les notifications encore en attente après 120 secondes passent à l’état `expired` et restent visibles dans la mini-app, sans être envoyées individuellement. Ces deux valeurs sont configurables.
 - Un même article ne produit qu’une alerte par utilisateur, même s’il correspond à plusieurs filtres. Une baisse de prix ne déclenche pas une seconde alerte.
 - HTTP 401 sur le catalogue : une session invalide est possible. La session est jetée et recréée, au maximum **3 fois par heure**, avec attente exponentielle entre les tentatives ; au-delà, arrêt persistant. Un cookie expiré est également détecté avant l’appel et remplacé sans erreur. HTTP 403, erreur d'authentification proxy 407, redirection, format inattendu ou refus robots : arrêt persistant, sans nouvelle tentative automatique. HTTP 429/erreurs réseau : attente globale exponentielle, respect de `Retry-After` sans plafonner la durée exigée par le serveur.
 - Aucun mécanisme ne garantit l’absence de bannissement. Ne pas utiliser ce projet pour contourner un blocage.
@@ -60,6 +62,16 @@ Des recommandations circulent sur Reddit pour « faire tenir » un scraper Vinte
 | Pagination au-delà de la première page / limite ~960 résultats | **Non repris** : augmenterait le volume de requêtes sans nécessité pour une veille temps réel. Une page de 96 résultats suffit ; affiner les filtres. |
 
 Si le collecteur s’arrête malgré ces réglages, la réponse correcte est de réduire la cadence ou d’obtenir une autorisation d’accès — pas de masquer l’origine des requêtes.
+
+### Observation ciblée du catalogue
+
+Le navigateur public charge les résultats par une requête JSON au catalogue. Aucun flux WebSocket ou Server-Sent Events n’a été observé pour pousser les nouvelles annonces : la détection reste donc un relevé périodique. Pour contrôler le schéma et l’ordre réellement reçus sans capturer de cookie, de jeton, de mot de passe, de titre ni de compte, lancer :
+
+```sh
+docker compose -f compose.tunnel.yaml run --rm --no-deps app python -m app.observe_catalog
+```
+
+La commande effectue un contrôle de robots.txt, ouvre une session anonyme, puis compare deux relevés espacés de 15 secondes. Elle affiche les clés JSON, les éventuels champs de date, les dix premiers identifiants, la compression, les octets et le nombre de nouveaux identifiants. Elle ne modifie pas la base.
 
 ## Comptabilité de gestion
 

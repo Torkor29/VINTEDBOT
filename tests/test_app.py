@@ -83,6 +83,16 @@ class Domain(unittest.TestCase):
         self.store.ingest(self.filt(), normalize_items(raw_items(2)))
         self.assertEqual(self.store.alerts(42), [])
 
+    def test_only_items_before_previous_head_are_alerted(self):
+        filt = self.filt()
+        self.store.ingest(filt, normalize_items(raw_items(100, 99)))
+        result = self.store.ingest(self.filt(), normalize_items(raw_items(50, 49)))
+        self.assertEqual(result["anchor_status"], "missing")
+        self.assertEqual(self.store.alerts(42), [])
+        result = self.store.ingest(self.filt(), normalize_items(raw_items(51, 50, 49)))
+        self.assertEqual(result["anchor_status"], "found")
+        self.assertEqual([a["item_id"] for a in self.store.alerts(42)], ["51"])
+
     def test_no_data_access_across_users(self):
         self.assertEqual(self.store.filters(99), [])
         with self.assertRaises(LookupError):
@@ -263,6 +273,39 @@ class Domain(unittest.TestCase):
         worker.deliver()
         self.assertEqual(self.store.alerts(42)[0]["state"],"sent")
         self.assertEqual(calls[0][1]["chat_id"],42)
+
+    def test_long_interruption_rebaselines_and_outbox_prioritizes_recent(self):
+        self.store.save_filter(42, {**self.filter_data, "interval": 15}, self.fid)
+        responses = iter([
+            "User-agent: *\nAllow: /\n",
+            raw_items(1),
+            raw_items(3, 2, 1),
+            raw_items(4, 3, 2),
+        ])
+        worker = Collector(self.store, True, fetch=lambda _: next(responses), rebaseline_after=120)
+        with patch('app.workers.time.time') as clock:
+            clock.return_value = 1000
+            worker.step()
+            clock.return_value = 1001
+            worker.step()
+            clock.return_value = 1016
+            worker.step()
+            self.assertEqual([a['item_id'] for a in self.store.alerts(42)], ['3', '2'])
+            clock.return_value = 1200
+            worker.step()
+        self.assertEqual([a['item_id'] for a in self.store.alerts(42)], ['3', '2'])
+        with self.store.db() as c:
+            c.execute("INSERT INTO users VALUES(42,42)")
+            current = time.time()
+            c.execute("UPDATE alerts SET created=? WHERE item_id='3'", (current,))
+            c.execute("UPDATE alerts SET created=? WHERE item_id='2'", (current - 500,))
+        telegram = Telegram(self.store, TOKEN, {42}, "https://bot.example", max_age=120)
+        calls = []
+        telegram.call = lambda method, data: calls.append((method, data)) or {"message_id": 7}
+        telegram.deliver()
+        self.assertIn('3', calls[0][1]['reply_markup']['inline_keyboard'][0][0]['url'])
+        states = {a['item_id']: a['state'] for a in self.store.alerts(42)}
+        self.assertEqual(states, {'3': 'sent', '2': 'expired'})
 
     def test_format_change_never_accepted_as_empty_catalogue(self):
         for value in ['{}', '<html>challenge</html>', '{"items":{}}']:

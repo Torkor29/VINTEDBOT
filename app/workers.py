@@ -1,8 +1,10 @@
 """Single collector, persistent global limits, and durable Telegram outbox."""
+import gzip
 import json
 import logging
 import random
 import time
+from io import BytesIO
 from http.cookiejar import CookieJar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -16,6 +18,7 @@ from .proxy import VintedProxyHandler, proxy_url
 
 log = logging.getLogger(__name__)
 USER_AGENT = "VintedBotPersonal/0.1"
+MAX_RESPONSE_BYTES = 2_000_000
 
 
 class RemoteError(Exception):
@@ -94,6 +97,7 @@ class VintedSession:
         self.opener = build_opener(VintedProxyHandler(proxy_url()), NoRedirect,
                                   HTTPCookieProcessor(self.cookies))
         self.ready = False
+        self.last_response_meta = None
 
     def valid(self):
         """Le cookie anonyme expire ; ne jamais réutiliser un jeton périmé."""
@@ -110,18 +114,36 @@ class VintedSession:
         homepage = url == ORIGIN + "/"
         # Aucune usurpation d'identité : agent réel, langue du catalogue demandé.
         headers = {"User-Agent": USER_AGENT, "Accept-Language": "fr-FR,fr;q=0.9",
+                   "Accept-Encoding": "gzip",
                    "Accept": "text/html" if homepage else "application/json"}
+        started = time.monotonic()
         try:
             with self.opener.open(Request(url, headers=headers), timeout=20) as response:
                 if homepage:
                     self.ready = self.valid()
                     if not self.ready:
                         raise ValueError("Cookie de session absent")
+                    self.last_response_meta = {"compressed_body_bytes": 0, "decoded_bytes": 0,
+                                               "encoding": response.headers.get("Content-Encoding", "identity"),
+                                               "duration_ms": round((time.monotonic() - started) * 1000)}
                     return ""
-                raw = response.read(2_000_001)
-                if len(raw) > 2_000_000:
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
                     raise ValueError("Réponse trop volumineuse")
-                return raw.decode("utf-8")
+                encoding = response.headers.get("Content-Encoding", "identity").lower()
+                if encoding == "gzip":
+                    with gzip.GzipFile(fileobj=BytesIO(raw)) as packed:
+                        decoded = packed.read(MAX_RESPONSE_BYTES + 1)
+                elif encoding in ("", "identity"):
+                    decoded = raw
+                else:
+                    raise ValueError("Compression de réponse inattendue")
+                if len(decoded) > MAX_RESPONSE_BYTES:
+                    raise ValueError("Réponse décompressée trop volumineuse")
+                self.last_response_meta = {"compressed_body_bytes": len(raw), "decoded_bytes": len(decoded),
+                                           "encoding": encoding or "identity",
+                                           "duration_ms": round((time.monotonic() - started) * 1000)}
+                return decoded.decode("utf-8")
         except HTTPError as e:
             status, retry = e.code, retry_seconds(e.headers.get("Retry-After"))
             e.close()
@@ -134,9 +156,11 @@ class VintedSession:
 
 
 class Collector:
-    def __init__(self, store, enabled=False, gap=1, fetch=None):
+    def __init__(self, store, enabled=False, gap=1, fetch=None, page_size=24, rebaseline_after=120):
         self.session = VintedSession() if fetch is None else None
         self.store, self.enabled, self.gap, self.fetch = store, enabled, max(1, gap), fetch or self.session
+        self.page_size = min(96, max(10, int(page_size)))
+        self.rebaseline_after = max(60, int(rebaseline_after))
         self.robots = None
         self.robots_until = 0
 
@@ -149,6 +173,18 @@ class Collector:
         # No search parameters, response bodies, cookies, tokens or user IDs.
         self.store.set("collector_last_attempt", {"stage": stage, "outcome": outcome,
                        "http_status": http_status, "at": time.time()})
+
+    def record_transfer(self, stage):
+        if self.session is None or not self.session.last_response_meta:
+            return
+        meta = {"stage": stage, "at": time.time(), **self.session.last_response_meta}
+        self.store.set("collector_last_transfer", meta)
+        totals = self.store.get("collector_transfer_totals", {"compressed_body_bytes": 0, "decoded_bytes": 0,
+                                                                "responses": 0})
+        for key in ("compressed_body_bytes", "decoded_bytes"):
+            totals[key] = int(totals.get(key, 0)) + int(meta[key])
+        totals["responses"] = int(totals.get("responses", 0)) + 1
+        self.store.set("collector_transfer_totals", totals)
 
     def halt(self, stage, message):
         self.store.set("collector_halted", message)
@@ -163,7 +199,8 @@ class Collector:
         if not row:
             return
         f = dict(row)
-        api = ORIGIN + "/api/v2/catalog/items?" + urlencode(parse_qsl(urlsplit(f["url"]).query) + [("page", "1"), ("per_page", "96")])
+        api = ORIGIN + "/api/v2/catalog/items?" + urlencode(parse_qsl(urlsplit(f["url"]).query) +
+                                                              [("page", "1"), ("per_page", str(self.page_size))])
         # Persist before network I/O; restarts never reset the global budget.
         self.store.set("next_request", now + self.gap)
         stage = "robots.txt" if self.robots_until <= now else "catalogue"
@@ -171,6 +208,7 @@ class Collector:
             if self.robots_until <= now:
                 self.record_attempt(stage, "requesting")
                 raw = self.fetch(ORIGIN + "/robots.txt")
+                self.record_transfer(stage)
                 if "user-agent:" not in raw.lower():
                     raise ValueError("robots.txt illisible")
                 self.robots = RobotFileParser()
@@ -194,12 +232,24 @@ class Collector:
                     return
                 self.record_attempt(stage, "requesting")
                 self.fetch(ORIGIN + "/")
+                self.record_transfer(stage)
                 self.record_attempt(stage, "ok", 200)
                 return  # Session creation consumes its own global request slot.
             with self.store.db() as c:
                 c.execute("UPDATE filters SET next_poll=? WHERE id=?", (now + f["interval"], f["id"]))
             self.record_attempt(stage, "requesting")
-            self.store.ingest(f, normalize_items(self.fetch(api)))
+            items = normalize_items(self.fetch(api))
+            self.record_transfer(stage)
+            silent = bool(f["initialized"] and f["last_poll"] and now - f["last_poll"] > self.rebaseline_after)
+            result = self.store.ingest(f, items, notify=not silent)
+            if result is None:
+                return
+            self.store.set("collector_window", {"items": len(items), "limit": self.page_size,
+                "new_items": result["new_items"], "alerts_created": result["alerts_created"],
+                "new_prefix": result["new_prefix"], "anchor_status": result["anchor_status"],
+                "silent_rebaseline": silent,
+                "saturated": result["anchor_status"] == "missing",
+                "at": now})
             self.record_attempt(stage, "ok", 200)
             self.store.set("collector_failures", 0)
             self.store.set("collector_error", "")
@@ -248,8 +298,9 @@ class Collector:
 
 
 class Telegram:
-    def __init__(self, store, token, allowed, public_url, fetch=request):
+    def __init__(self, store, token, allowed, public_url, fetch=request, max_age=120):
         self.store, self.token, self.allowed, self.public_url, self.fetch = store, token, allowed, public_url, fetch
+        self.max_age = max(30, int(max_age))
 
     def call(self, method, data):
         response = json.loads(self.fetch(f"https://api.telegram.org/bot{self.token}/{method}", data, timeout=40))
@@ -288,10 +339,12 @@ class Telegram:
         if not self.allowed or self.store.get("telegram_next_send", 0) > now:
             return
         with self.store.db() as c:
+            c.execute("UPDATE alerts SET state='expired' WHERE state='pending' AND created<?", (now - self.max_age,))
             placeholders = ','.join('?' for _ in self.allowed)
             r = c.execute(f"""SELECT a.*,u.chat_id FROM alerts a JOIN users u ON u.id=a.user_id
                 WHERE a.state='pending' AND a.next_try<=? AND u.chat_id IS NOT NULL
-                AND a.user_id IN ({placeholders}) ORDER BY a.id LIMIT 1""", (now, *sorted(self.allowed))).fetchone()
+                AND a.user_id IN ({placeholders}) ORDER BY a.created DESC,a.id DESC LIMIT 1""",
+                (now, *sorted(self.allowed))).fetchone()
         if not r:
             return
         text = f"{r['filter_name']}\n{r['title']}\n{r['price_cents']/100:.2f} € · {r['brand']} · {r['size']}"

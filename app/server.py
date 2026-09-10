@@ -129,8 +129,14 @@ def configuration():
     enabled = os.environ.get("VINTED_COLLECTION_ENABLED", "false").lower() == "true"
     if enabled and os.environ.get("VINTED_ACCESS_AUTHORIZED", "false").lower() != "true":
         raise SystemExit("Collecte désactivée : un accès autorisé doit être confirmé dans la configuration.")
+    page_size = int(os.environ.get("VINTED_RESULTS_PER_POLL", "24"))
+    if not 10 <= page_size <= 96:
+        raise SystemExit("VINTED_RESULTS_PER_POLL doit être compris entre 10 et 96.")
     return {"token": token, "allowed": allowed, "public_url": url,
-            "collector_enabled": enabled, "gap": max(1, int(os.environ.get("GLOBAL_REQUEST_GAP_SECONDS", "1")))}
+            "collector_enabled": enabled, "gap": max(1, int(os.environ.get("GLOBAL_REQUEST_GAP_SECONDS", "1"))),
+            "page_size": page_size,
+            "rebaseline_after": max(60, int(os.environ.get("VINTED_REBASE_AFTER_SECONDS", "120"))),
+            "alert_max_age": max(30, int(os.environ.get("ALERT_MAX_AGE_SECONDS", "120")))}
 
 
 def main():
@@ -145,8 +151,10 @@ def main():
         raise SystemExit("Une instance utilise déjà cette base de données.")
     store = Store(path)
     stop = threading.Event()
-    collector = Collector(store, config["collector_enabled"], config["gap"])
-    telegram = Telegram(store, config["token"], config["allowed"], config["public_url"])
+    collector = Collector(store, config["collector_enabled"], config["gap"],
+                          page_size=config["page_size"], rebaseline_after=config["rebaseline_after"])
+    telegram = Telegram(store, config["token"], config["allowed"], config["public_url"],
+                        max_age=config["alert_max_age"])
     for action, pause in ((collector.step, 0.25), (telegram.poll, 1), (telegram.deliver, 1.1)):
         threading.Thread(target=run_loop, args=(stop, action, pause), daemon=True).start()
     server = ThreadingHTTPServer((os.environ.get("BIND_HOST", "127.0.0.1"), int(os.environ.get("PORT", "8080"))), make_handler(store, config))

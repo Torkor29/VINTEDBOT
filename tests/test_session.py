@@ -1,3 +1,4 @@
+import gzip
 import json
 import tempfile
 import unittest
@@ -33,14 +34,36 @@ class FixtureTransport(HTTPSHandler):
         elif self.catalog_status != 200:
             raise HTTPError(req.full_url, self.catalog_status, 'refus', Message(), BytesIO(b''))
         else:
-            body = json.dumps({'items': [{'id': self.item, 'title': 'Nike',
-                    'price': {'amount': '5.00', 'currency_code': 'EUR'}}]}).encode()
+            body = json.dumps({'items': [{'id': item, 'title': 'Nike',
+                    'price': {'amount': '5.00', 'currency_code': 'EUR'}}
+                    for item in range(self.item, 0, -1)]}).encode()
         response = addinfourl(BytesIO(body), headers, req.full_url, 200)
         response.msg = 'OK'
         return response
 
 
 class SessionIntegration(unittest.TestCase):
+    def test_gzip_is_requested_decoded_and_measured(self):
+        class GzipTransport(FixtureTransport):
+            def https_open(self, req):
+                self.assert_header = req.get_header('Accept-encoding')
+                raw = json.dumps({'items': []}).encode()
+                body = gzip.compress(raw)
+                headers = Message()
+                headers['Content-Encoding'] = 'gzip'
+                response = addinfourl(BytesIO(body), headers, req.full_url, 200)
+                response.msg = 'OK'
+                return response
+
+        session = VintedSession()
+        transport = GzipTransport()
+        session.opener = build_opener(NoRedirect, transport)
+        self.assertEqual(json.loads(session(ORIGIN + '/api/v2/catalog/items')), {'items': []})
+        self.assertEqual(transport.assert_header, 'gzip')
+        self.assertEqual(session.last_response_meta['compressed_body_bytes'], len(gzip.compress(b'{"items": []}')))
+        self.assertEqual(session.last_response_meta['decoded_bytes'], len(b'{"items": []}'))
+        self.assertEqual(session.last_response_meta['encoding'], 'gzip')
+
     def test_cookie_roundtrip_budget_baseline_and_new_alert(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / 'db')
